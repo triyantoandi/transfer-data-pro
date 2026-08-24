@@ -1,43 +1,64 @@
 {
-  "schemaVersion": "1.0.0",
-  "collections": [
-    {
-      "id": "files",
-      "description": "Metadata rekam jejak file yang ditransfer antara HP dan PC",
-      "fields": [
-        { "name": "id", "type": "string", "description": "Unique identifier file" },
-        { "name": "originalName", "type": "string", "description": "Nama file asli" },
-        { "name": "filename", "type": "string", "description": "Nama file tersimpan" },
-        { "name": "size", "type": "number", "description": "Ukuran file dalam bytes" },
-        { "name": "mimetype", "type": "string", "description": "MIME type file" },
-        { "name": "extension", "type": "string", "description": "Ekstensi file" },
-        { "name": "uploadedAt", "type": "string", "description": "Waktu upload ISO timestamp" },
-        { "name": "dateGroup", "type": "string", "description": "Kelompok tanggal arsip (misal: 24 Agustus 2026)" },
-        { "name": "category", "type": "string", "description": "Kategori file: photo, video, document, audio, archive, other" },
-        { "name": "device", "type": "string", "description": "Nama perangkat pengirim (iPhone, Android, PC)" },
-        { "name": "isHeic", "type": "boolean", "description": "Apakah format Apple HEIC/HEIF mentah" },
-        { "name": "isMov", "type": "boolean", "description": "Apakah format video QuickTime MOV asli" }
-      ]
+  "entities": {
+    "FileRecord": {
+      "title": "FileRecord",
+      "description": "Metadata file transfer antara HP dan PC",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "originalName": { "type": "string", "maxLength": 512 },
+        "filename": { "type": "string", "maxLength": 512 },
+        "size": { "type": "number" },
+        "mimetype": { "type": "string", "maxLength": 128 },
+        "extension": { "type": "string", "maxLength": 32 },
+        "uploadedAt": { "type": "string", "maxLength": 64 },
+        "dateGroup": { "type": "string", "maxLength": 64 },
+        "category": { "type": "string", "maxLength": 32 },
+        "device": { "type": "string", "maxLength": 64 },
+        "isHeic": { "type": "boolean" },
+        "isMov": { "type": "boolean" },
+        "syncedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "originalName", "filename", "size"]
     },
-    {
-      "id": "notes",
-      "description": "Catatan teks, link website, dan sinkronisasi clipboard instan",
-      "fields": [
-        { "name": "id", "type": "string", "description": "Unique ID catatan" },
-        { "name": "content", "type": "string", "description": "Isi teks atau URL" },
-        { "name": "sender", "type": "string", "description": "Nama perangkat pengirim" },
-        { "name": "timestamp", "type": "string", "description": "Waktu pembuatan ISO timestamp" },
-        { "name": "isLink", "type": "boolean", "description": "Apakah isi catatan merupakan link valid" }
-      ]
+    "TextNote": {
+      "title": "TextNote",
+      "description": "Catatan teks cepat dan clipboard instan",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "content": { "type": "string", "maxLength": 10000 },
+        "sender": { "type": "string", "maxLength": 100 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "isLink": { "type": "boolean" },
+        "syncedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "content", "sender", "timestamp"]
     },
-    {
-      "id": "system_logs",
-      "description": "Log aktivitas transfer dan sinkronisasi server WiFi",
-      "fields": [
-        { "name": "action", "type": "string", "description": "Aktivitas yang terjadi" },
-        { "name": "details", "type": "string", "description": "Rincian aktivitas" },
-        { "name": "timestamp", "type": "string", "description": "Waktu log ISO" }
-      ]
+    "SystemLog": {
+      "title": "SystemLog",
+      "description": "Log aktivitas sistem WiFi transfer",
+      "type": "object",
+      "properties": {
+        "action": { "type": "string", "maxLength": 64 },
+        "details": { "type": "string", "maxLength": 1000 },
+        "timestamp": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["action", "details", "timestamp"]
     }
-  ]
+  },
+  "firestore": {
+    "/files/{fileId}": {
+      "schema": "FileRecord",
+      "description": "Koleksi metadata berkas yang ditransfer"
+    },
+    "/notes/{noteId}": {
+      "schema": "TextNote",
+      "description": "Koleksi catatan teks dan sinkronisasi clipboard"
+    },
+    "/system_logs/{logId}": {
+      "schema": "SystemLog",
+      "description": "Koleksi riwayat aktivitas transfer"
+    }
+  }
 }
