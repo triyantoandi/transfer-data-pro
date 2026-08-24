@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Files collection - read and write allowed for transfer sync
+    match /files/{fileId} {
+      allow read, write: if true;
+    }
+    
+    // Quick text notes and clipboard items
+    match /notes/{noteId} {
+      allow read, write: if true;
+    }
+
+    // System activity logs
+    match /system_logs/{logId} {
+      allow read, write: if true;
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Transfer File WiFi",
+  "description": "Sistem transfer file kilat & backup foto/video tanpa instal aplikasi dari iPhone & Android ke PC via WiFi lokal dengan file utuh dan organisasi otomatis per tanggal.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
