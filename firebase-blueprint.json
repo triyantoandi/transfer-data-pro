@@ -45,6 +45,19 @@
         "timestamp": { "type": "string", "maxLength": 64 }
       },
       "required": ["action", "details", "timestamp"]
+    },
+    "SignalingSession": {
+      "title": "SignalingSession",
+      "description": "WebRTC P2P Signaling session antara PC dan HP",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string", "maxLength": 128 },
+        "offer": { "type": "string" },
+        "answer": { "type": "string" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["sessionId"]
     }
   },
   "firestore": {
@@ -59,6 +72,18 @@
     "/system_logs/{logId}": {
       "schema": "SystemLog",
       "description": "Koleksi riwayat aktivitas transfer"
+    },
+    "/signaling_sessions/{sessionId}": {
+      "schema": "SignalingSession",
+      "description": "Koleksi sinyal WebRTC DataChannel"
+    },
+    "/signaling_sessions/{sessionId}/callerCandidates/{candidateId}": {
+      "schema": "object",
+      "description": "ICE candidates dari pengirim"
+    },
+    "/signaling_sessions/{sessionId}/calleeCandidates/{candidateId}": {
+      "schema": "object",
+      "description": "ICE candidates dari penerima"
     }
   }
 }

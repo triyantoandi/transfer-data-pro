@@ -6,6 +6,12 @@ import multer from "multer";
 import JSZip from "jszip";
 import { createServer as createViteServer } from "vite";
 import {
+  handleTransferInit,
+  handleTransferChunk,
+  handleTransferComplete,
+  handleTransferCancel
+} from "./server/chunkTransferHandler";
+import {
   syncFileToFirestore,
   deleteFileFromFirestore,
   batchDeleteFilesFromFirestore,
@@ -236,7 +242,100 @@ async function startServer() {
     res.json({ files: formatted });
   });
 
-  // Upload files endpoint
+  // Connection test ping endpoint
+  app.get("/api/transfer/test-ping", (req: Request, res: Response) => {
+    res.json({
+      status: "ok",
+      serverTime: new Date().toISOString(),
+      hostname: os.hostname(),
+      message: "Koneksi ke PC Server Aktif dan Siap Menerima File"
+    });
+  });
+
+  // Chunked Transfer Endpoints
+  const chunkUpload = multer({ dest: path.join(UPLOAD_DIR, 'chunks_temp') });
+
+  app.post("/api/transfer/init", (req: Request, res: Response) => {
+    handleTransferInit(req, res, UPLOAD_DIR);
+  });
+
+  app.post("/api/transfer/chunk", chunkUpload.single("chunk"), (req: Request, res: Response) => {
+    handleTransferChunk(req, res, UPLOAD_DIR);
+  });
+
+  app.post("/api/transfer/complete", (req: Request, res: Response) => {
+    handleTransferComplete(req, res, UPLOAD_DIR, (originalName, finalFilename, size, mimeType, device, finalPath) => {
+      const ext = path.extname(originalName).toLowerCase();
+      const isHeic = ext === '.heic' || ext === '.heif';
+      const isMov = ext === '.mov';
+      const category = getCategory(ext, mimeType);
+      const now = new Date();
+      const dateGroup = formatDateIndo(now);
+
+      const record: StoredFile = {
+        id: Math.random().toString(36).substring(2, 11) + '-' + Date.now().toString(36),
+        originalName: Buffer.from(originalName, 'latin1').toString('utf8'),
+        filename: finalFilename,
+        size,
+        mimetype: mimeType || 'application/octet-stream',
+        extension: ext.replace('.', ''),
+        uploadedAt: now.toISOString(),
+        dateGroup,
+        category,
+        device: detectDevice('', device),
+        isHeic,
+        isMov,
+        filePath: finalPath
+      };
+
+      fileRecords.unshift(record);
+      saveManifest();
+
+      // SSE Broadcast
+      broadcastEvent('files_uploaded', {
+        count: 1,
+        device: record.device,
+        files: [{
+          id: record.id,
+          originalName: record.originalName,
+          size: record.size,
+          category: record.category,
+          isHeic: record.isHeic,
+          isMov: record.isMov
+        }]
+      });
+
+      // Firebase Sync
+      syncFileToFirestore({
+        id: record.id,
+        originalName: record.originalName,
+        filename: record.filename,
+        size: record.size,
+        mimetype: record.mimetype,
+        extension: record.extension,
+        uploadedAt: record.uploadedAt,
+        dateGroup: record.dateGroup,
+        category: record.category,
+        device: record.device,
+        isHeic: record.isHeic,
+        isMov: record.isMov
+      }).catch(e => console.error("Firestore sync error:", e));
+
+      logSystemActivityToFirestore("transfer_chunked", `File ${record.originalName} (${(record.size / 1024 / 1024).toFixed(2)} MB) berhasil ditransfer dari ${record.device}`).catch(() => {});
+
+      return {
+        ...record,
+        url: `/api/files/${record.id}/view`,
+        downloadUrl: `/api/files/${record.id}/download`
+      };
+    });
+  });
+
+  app.post("/api/transfer/cancel/:id", (req: Request, res: Response) => {
+    handleTransferCancel(req, res, UPLOAD_DIR);
+  });
+
+  // Upload files endpoint (Legacy Direct Fallback)
   app.post("/api/upload", upload.array("files", 100), (req: Request, res: Response) => {
     try {
       const uploadedFiles = req.files as Express.Multer.File[];

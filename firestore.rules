@@ -15,5 +15,17 @@ service cloud.firestore {
     match /system_logs/{logId} {
       allow read, write: if true;
     }
+
+    // WebRTC Signaling sessions & ICE candidates
+    match /signaling_sessions/{sessionId} {
+      allow read, write: if true;
+
+      match /callerCandidates/{candidateId} {
+        allow read, write: if true;
+      }
+      match /calleeCandidates/{candidateId} {
+        allow read, write: if true;
+      }
+    }
   }
 }

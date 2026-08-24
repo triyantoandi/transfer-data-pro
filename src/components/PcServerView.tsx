@@ -220,6 +220,10 @@ export const PcServerView: React.FC<PcServerViewProps> = ({
                 <Database className="w-3.5 h-3.5 text-amber-400" />
                 Firebase Firestore Terhubung
               </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-teal-500/15 border border-teal-500/30 text-teal-300 text-xs font-semibold">
+                <ShieldCheck className="w-3.5 h-3.5 text-teal-400" />
+                Chunk Stream 64KB &amp; WebRTC
+              </span>
               <span className="px-2.5 py-1 rounded-full bg-white/5 border border-white/10 text-slate-300 text-xs font-medium">
                 Port {status?.port || 3000}
               </span>

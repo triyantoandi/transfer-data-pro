@@ -1,3 +1,16 @@
+export type TransferState = 
+  | 'idle'
+  | 'selecting'
+  | 'connecting'
+  | 'connected'
+  | 'preparing'
+  | 'transferring'
+  | 'paused'
+  | 'finalizing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
 export interface FileRecord {
   id: string;
   originalName: string;
@@ -28,19 +41,42 @@ export interface ServerStatus {
   serverStartTime: string;
   firebaseConnected?: boolean;
   firebaseProjectId?: string;
+  webrtcSupported?: boolean;
 }
 
-export interface UploadProgressItem {
+export interface TransferProgressItem {
   id: string;
+  transferId: string;
   name: string;
   size: number;
+  type: string;
+  lastModified?: number;
   progress: number;
   speed: string;
-  status: 'queued' | 'uploading' | 'completed' | 'error';
+  status: TransferState;
   category: 'photo' | 'video' | 'document' | 'audio' | 'other';
-  errorMsg?: string;
+  channelType: 'webrtc' | 'http-chunked' | 'direct';
+  chunkCurrent: number;
+  chunkTotal: number;
+  errorDetail?: {
+    stage: string;
+    message: string;
+    code?: string;
+  };
   isHeic?: boolean;
   isMov?: boolean;
+}
+
+// Alias for backward compatibility
+export type UploadProgressItem = TransferProgressItem;
+
+export interface DebugLogEntry {
+  id: string;
+  timestamp: string;
+  stage: string;
+  message: string;
+  level: 'info' | 'warn' | 'error' | 'success';
+  details?: any;
 }
 
 export interface TextNote {
@@ -52,3 +88,4 @@ export interface TextNote {
 }
 
 export type ViewMode = 'pc' | 'mobile' | 'dual';
+
