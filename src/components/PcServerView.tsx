@@ -84,8 +84,12 @@ export const PcServerView: React.FC<PcServerViewProps> = ({
   const currentIp = availableIps[selectedIpIndex] || availableIps[0];
   const activePort = status?.port || 3000;
   
-  const clientUrl = status?.clientUrl || (typeof window !== 'undefined' ? `${window.location.origin}/?mode=mobile` : '');
-  const ipBasedClientUrl = `http://${currentIp}:${activePort}/?mode=mobile`;
+  // Prefer explicit IP so mobile device connects directly to PC LAN server
+  const clientUrl = currentIp && currentIp !== '127.0.0.1' && currentIp !== 'localhost'
+    ? `http://${currentIp}:${activePort}/?mode=mobile&pc_ip=${currentIp}&pc_port=${activePort}`
+    : (typeof window !== 'undefined' ? `${window.location.origin}/?mode=mobile&pc_ip=${currentIp}&pc_port=${activePort}` : '');
+  const ipBasedClientUrl = `http://${currentIp}:${activePort}/?mode=mobile&pc_ip=${currentIp}&pc_port=${activePort}`;
+  const healthCheckUrl = `http://${currentIp}:${activePort}/api/health`;
 
   const handleCopy = (text: string, isNote: boolean = false, noteId?: string) => {
     navigator.clipboard.writeText(text);

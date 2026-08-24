@@ -1,4 +1,5 @@
 import express, { Request, Response } from "express";
+import cors from "cors";
 import path from "path";
 import fs from "fs";
 import os from "os";
@@ -179,8 +180,43 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // CORS configuration for LAN WiFi cross-origin access
+  app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Device-Name', 'X-Requested-With', 'Range', 'Accept'],
+    exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Disposition']
+  }));
+
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // Official Standard Health Check endpoint
+  app.get("/api/health", (_req: Request, res: Response) => {
+    res.status(200).json({
+      ok: true,
+      service: "transfer-file-wifi",
+      device: "pc",
+      hostname: os.hostname(),
+      port: PORT,
+      serverTime: new Date().toISOString()
+    });
+  });
+
+  // Pairing endpoint for mobile handshake
+  app.post("/api/pair", (req: Request, res: Response) => {
+    const clientDevice = detectDevice(req.get('user-agent'), req.body.deviceName || (req.headers['x-device-name'] as string));
+    res.status(200).json({
+      ok: true,
+      paired: true,
+      service: "transfer-file-wifi",
+      server: "pc",
+      device: clientDevice,
+      hostname: os.hostname(),
+      message: `Perangkat ${clientDevice} berhasil dipasangkan dengan PC Server`,
+      timestamp: new Date().toISOString()
+    });
+  });
 
   // SSE endpoint for live sync
   app.get("/api/events", (req: Request, res: Response) => {

@@ -41,6 +41,13 @@ import {
   sendFileViaChunkedProtocol, 
   CHUNK_SIZE 
 } from '../lib/transferManager';
+import { 
+  getTargetPcConfig, 
+  saveTargetPcConfig, 
+  pcFetch, 
+  buildPcApiUrl, 
+  ApiResponse 
+} from '../lib/pcConnection';
 import { WebRTCManager } from '../lib/webrtcTransfer';
 
 interface MobileClientViewProps {
@@ -70,6 +77,38 @@ export const MobileClientView: React.FC<MobileClientViewProps> = ({
   const [noteInput, setNoteInput] = useState('');
   const [copiedNoteId, setCopiedNoteId] = useState<string | null>(null);
   
+  // PC Connection & Diagnostics State
+  const [pcConfig, setPcConfig] = useState(getTargetPcConfig());
+  const [customIpInput, setCustomIpInput] = useState(pcConfig.ip);
+  const [customPortInput, setCustomPortInput] = useState(pcConfig.port.toString());
+  const [showIpConfigModal, setShowIpConfigModal] = useState(false);
+
+  const [diagnosticData, setDiagnosticData] = useState<{
+    tested: boolean;
+    loading: boolean;
+    pcIp: string;
+    pcPort: number;
+    healthUrl: string;
+    httpMethod: string;
+    httpStatus: number | string;
+    httpResponse: string;
+    serverStatus: 'ONLINE' | 'OFFLINE' | 'CHECKING' | 'ERROR';
+    responseTimeMs?: number;
+    pairingStatus?: 'UNPAIRED' | 'PAIRING' | 'PAIRED' | 'FAILED';
+    pairingDetails?: string;
+  }>({
+    tested: false,
+    loading: false,
+    pcIp: pcConfig.ip,
+    pcPort: pcConfig.port,
+    healthUrl: `${pcConfig.baseUrl}/api/health`,
+    httpMethod: 'GET',
+    httpStatus: '-',
+    httpResponse: 'Menunggu pengujian koneksi...',
+    serverStatus: 'CHECKING',
+    pairingStatus: 'UNPAIRED',
+  });
+
   // Debug & diagnostics state
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
   const [showDebugPanel, setShowDebugPanel] = useState<boolean>(false);
@@ -95,12 +134,102 @@ export const MobileClientView: React.FC<MobileClientViewProps> = ({
   const abortControllersRef = useRef<Map<string, AbortController>>(new Map());
   const webrtcManagerRef = useRef<WebRTCManager | null>(null);
 
-  // Subscribe to transfer logger
+  // Health check runner
+  const runHealthCheck = useCallback(async (showToast: boolean = false) => {
+    setDiagnosticData((prev) => ({ ...prev, loading: true, serverStatus: 'CHECKING' }));
+    transferLogger.log('HEALTH_CHECK', `Memeriksa status PC Server di ${pcConfig.baseUrl}/api/health`, 'info');
+
+    const res = await pcFetch('/api/health', { method: 'GET' });
+    const isOk = res.ok && res.status === 200;
+
+    const responseText = typeof res.data === 'object'
+      ? JSON.stringify(res.data, null, 2)
+      : (res.error || String(res.data || 'Tidak ada response'));
+
+    setDiagnosticData((prev) => ({
+      ...prev,
+      tested: true,
+      loading: false,
+      pcIp: pcConfig.ip,
+      pcPort: pcConfig.port,
+      healthUrl: res.targetUrl,
+      httpMethod: res.method,
+      httpStatus: res.status > 0 ? res.status : 'Network Error (0)',
+      httpResponse: responseText,
+      serverStatus: isOk ? 'ONLINE' : 'OFFLINE',
+      responseTimeMs: res.responseTimeMs,
+    }));
+
+    setConnectionTestResult({
+      tested: true,
+      pingMs: res.responseTimeMs,
+      success: isOk,
+      message: isOk ? `PC Terhubung (HTTP ${res.status})` : `Koneksi PC Gagal (HTTP ${res.status})`,
+      details: isOk
+        ? `Target: ${res.targetUrl} | Latensi: ${res.responseTimeMs} ms | Service: ${res.data?.service || 'WiFi Transfer'}`
+        : `Target: ${res.targetUrl} | Error: ${res.status === 404 ? 'HTTP 404 Endpoint Not Found (Periksa server PC & IP)' : res.error || 'Server tidak dapat dijangkau'}`
+    });
+
+    if (isOk) {
+      transferLogger.log('HEALTH_CHECK', `PC Server Online (${res.responseTimeMs} ms)`, 'success', res.data);
+      if (showToast) showNotification(`PC Terhubung (${res.responseTimeMs} ms)`, 'success');
+    } else {
+      transferLogger.log('HEALTH_CHECK', `PC Server Gagal: ${res.status === 404 ? 'HTTP 404 Not Found' : res.error || res.statusText}`, 'error', { url: res.targetUrl, status: res.status });
+      if (showToast) showNotification(res.status === 404 ? 'HTTP 404: Endpoint tidak ditemukan' : 'Gagal terhubung ke PC', 'error');
+    }
+
+    return isOk;
+  }, [pcConfig]);
+
+  // Pairing handshake runner
+  const runPairingHandshake = async () => {
+    setDiagnosticData((prev) => ({ ...prev, pairingStatus: 'PAIRING' }));
+    transferLogger.log('PAIRING', `Memulai handshake pairing dengan PC di ${pcConfig.baseUrl}/api/pair...`, 'info');
+
+    const res = await pcFetch('/api/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceName: deviceName || 'HP Mobile' })
+    });
+
+    if (res.ok && res.status === 200) {
+      transferLogger.log('PAIRING', `Handshake pairing PC berhasil!`, 'success', res.data);
+      setDiagnosticData((prev) => ({
+        ...prev,
+        pairingStatus: 'PAIRED',
+        pairingDetails: res.data?.message || 'Perangkat berhasil dipasangkan'
+      }));
+      showNotification('Handshake Pairing Berhasil!', 'success');
+    } else {
+      transferLogger.log('PAIRING', `Handshake pairing gagal (${res.status}): ${res.error || 'Server menolak'}`, 'error');
+      setDiagnosticData((prev) => ({
+        ...prev,
+        pairingStatus: 'FAILED',
+        pairingDetails: `Gagal: HTTP ${res.status} - ${res.error || 'Periksa server PC'}`
+      }));
+      showNotification(`Pairing Gagal: HTTP ${res.status}`, 'error');
+    }
+  };
+
+  // Save manual IP config
+  const handleSaveCustomIp = (e: React.FormEvent) => {
+    e.preventDefault();
+    const newPort = parseInt(customPortInput, 10) || 3000;
+    const newConfig = saveTargetPcConfig(customIpInput.trim(), newPort);
+    setPcConfig(newConfig);
+    setShowIpConfigModal(false);
+    showNotification(`Target PC diatur ke ${newConfig.baseUrl}`, 'info');
+  };
+
+  // Subscribe to transfer logger & auto-run initial health check
   useEffect(() => {
     setDebugLogs(transferLogger.getLogs());
     const unsub = transferLogger.subscribe((entry) => {
       setDebugLogs((prev) => [entry, ...prev.slice(0, 100)]);
     });
+
+    // Run initial health check
+    runHealthCheck(false);
 
     // Initialize WebRTC client
     const webrtc = new WebRTCManager(transferLogger);
@@ -112,7 +241,7 @@ export const MobileClientView: React.FC<MobileClientViewProps> = ({
       unsub();
       webrtc.cleanup();
     };
-  }, []);
+  }, [runHealthCheck]);
 
   const showNotification = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setNotification({ message, type });
@@ -466,12 +595,31 @@ export const MobileClientView: React.FC<MobileClientViewProps> = ({
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <span className="flex h-2.5 w-2.5 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                diagnosticData.serverStatus === 'ONLINE' ? 'bg-emerald-400' : diagnosticData.serverStatus === 'CHECKING' ? 'bg-amber-400' : 'bg-rose-400'
+              }`}></span>
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                diagnosticData.serverStatus === 'ONLINE' ? 'bg-emerald-400' : diagnosticData.serverStatus === 'CHECKING' ? 'bg-amber-400' : 'bg-rose-400'
+              }`}></span>
             </span>
-            <span className="text-xs font-bold tracking-wide uppercase text-sky-300 flex items-center gap-1">
-              <Wifi className="w-3.5 h-3.5 text-sky-400" /> WiFi Transfer Aktif
-            </span>
+            <button
+              onClick={() => setActiveTab('test')}
+              className={`text-xs font-bold tracking-wide uppercase flex items-center gap-1 cursor-pointer transition hover:opacity-80 ${
+                diagnosticData.serverStatus === 'ONLINE'
+                  ? 'text-emerald-300'
+                  : diagnosticData.serverStatus === 'CHECKING'
+                  ? 'text-amber-300'
+                  : 'text-rose-300'
+              }`}
+              title="Klik untuk membuka tab Diagnostik Jaringan"
+            >
+              <Wifi className="w-3.5 h-3.5" />
+              {diagnosticData.serverStatus === 'ONLINE'
+                ? `PC Terhubung (${pcConfig.ip})`
+                : diagnosticData.serverStatus === 'CHECKING'
+                ? 'Memeriksa PC...'
+                : `PC Terputus (${diagnosticData.httpStatus === 404 ? 'HTTP 404' : 'Offline'})`}
+            </button>
           </div>
 
           <div className="flex items-center gap-1.5 text-xs glass-pill px-2.5 py-1 rounded-full border border-white/15">
@@ -769,45 +917,177 @@ export const MobileClientView: React.FC<MobileClientViewProps> = ({
         {/* Tab 2: Test Connection & Multi-Tier Transfer Tests */}
         {activeTab === 'test' && (
           <div className="space-y-4">
-            {/* Connection Test Section */}
+            {/* Realtime Diagnostic Status Overview Card */}
             <div className="glass-card rounded-2xl p-4 border border-sky-400/30 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-bold text-slate-100 uppercase tracking-wider flex items-center gap-1.5">
-                  <Zap className="w-4 h-4 text-amber-400" />
-                  Uji Koneksi (Test Connection)
+                  <Activity className="w-4 h-4 text-sky-400" />
+                  Status Diagnostik Jaringan PC
                 </h3>
-                <span className="text-[10px] text-slate-400 font-mono">Ping Server</span>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Tekan tombol di bawah untuk memeriksa apakah HP dapat menjangkau server PC di jaringan WiFi lokal.
-              </p>
-
-              <button
-                id="btn-test-connection"
-                onClick={handleTestConnection}
-                className="w-full py-3 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 text-slate-950 font-extrabold text-xs rounded-xl shadow-md transition flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Zap className="w-4 h-4 text-slate-950 fill-current" />
-                TEST CONNECTION (UJI RESPON PC)
-              </button>
-
-              {connectionTestResult && (
-                <div
-                  className={`p-3 rounded-xl text-xs space-y-1 ${
-                    connectionTestResult.success
-                      ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300'
-                      : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    diagnosticData.serverStatus === 'ONLINE'
+                      ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                      : diagnosticData.serverStatus === 'CHECKING'
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+                      : 'bg-rose-500/20 text-rose-300 border-rose-500/40'
                   }`}
                 >
-                  <div className="font-bold flex items-center gap-1.5">
-                    {connectionTestResult.success ? <CheckCircle className="w-4 h-4 text-emerald-400" /> : <AlertCircle className="w-4 h-4 text-rose-400" />}
-                    <span>{connectionTestResult.message}</span>
-                  </div>
-                  {connectionTestResult.details && (
-                    <p className="text-[11px] text-slate-300">{connectionTestResult.details}</p>
-                  )}
+                  {diagnosticData.serverStatus}
+                </span>
+              </div>
+
+              {/* Exact Diagnostic Table Requested by User */}
+              <div className="bg-slate-950/80 rounded-xl p-3 border border-white/10 text-xs font-mono space-y-2 overflow-x-auto">
+                <div className="grid grid-cols-3 gap-1 text-[11px] border-b border-white/10 pb-1.5">
+                  <span className="text-slate-400">Parameter</span>
+                  <span className="col-span-2 text-slate-200 font-semibold">Nilai Aktual</span>
                 </div>
-              )}
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">PC IP</span>
+                  <span className="col-span-2 text-sky-300 font-bold select-all">{pcConfig.ip}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">PC Port</span>
+                  <span className="col-span-2 text-sky-300 font-bold">{pcConfig.port}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">Health URL</span>
+                  <span className="col-span-2 text-amber-300 break-all select-all font-semibold">{diagnosticData.healthUrl}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">HTTP Method</span>
+                  <span className="col-span-2 text-emerald-400 font-bold">{diagnosticData.httpMethod}</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">HTTP Status</span>
+                  <span className={`col-span-2 font-bold ${
+                    diagnosticData.httpStatus === 200
+                      ? 'text-emerald-400'
+                      : diagnosticData.httpStatus === 404
+                      ? 'text-rose-400 underline'
+                      : 'text-amber-400'
+                  }`}>
+                    {diagnosticData.httpStatus === 200 ? '200 OK ✓' : diagnosticData.httpStatus === 404 ? '404 NOT FOUND (Cek Endpoint Server)' : diagnosticData.httpStatus}
+                  </span>
+                </div>
+                {diagnosticData.responseTimeMs !== undefined && (
+                  <div className="grid grid-cols-3 gap-1 text-[11px]">
+                    <span className="text-slate-400">Respons</span>
+                    <span className="col-span-2 text-slate-200">{diagnosticData.responseTimeMs} ms</span>
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-1 text-[11px]">
+                  <span className="text-slate-400">Handshake</span>
+                  <span className={`col-span-2 font-bold ${
+                    diagnosticData.pairingStatus === 'PAIRED' ? 'text-emerald-400' : 'text-slate-400'
+                  }`}>
+                    {diagnosticData.pairingStatus}
+                  </span>
+                </div>
+                <div className="pt-1 border-t border-white/10">
+                  <span className="text-slate-400 block text-[10px] mb-1">Payload / Respons Server:</span>
+                  <pre className="text-[10px] text-slate-300 bg-black/60 p-2 rounded max-h-24 overflow-y-auto whitespace-pre-wrap">
+                    {diagnosticData.httpResponse}
+                  </pre>
+                </div>
+              </div>
+
+              {/* Action Buttons for Connection Testing */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <button
+                  id="btn-test-health"
+                  onClick={() => runHealthCheck(true)}
+                  disabled={diagnosticData.loading}
+                  className="py-2.5 px-3 bg-gradient-to-r from-sky-400 to-teal-400 hover:from-sky-300 hover:to-teal-300 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-xl shadow transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${diagnosticData.loading ? 'animate-spin' : ''}`} />
+                  1. UJI GET /api/health
+                </button>
+
+                <button
+                  id="btn-test-pair"
+                  onClick={runPairingHandshake}
+                  disabled={diagnosticData.serverStatus !== 'ONLINE'}
+                  className="py-2.5 px-3 bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 disabled:opacity-40 text-slate-950 font-bold text-xs rounded-xl shadow transition flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Zap className="w-3.5 h-3.5 fill-current" />
+                  2. UJI POST /api/pair
+                </button>
+              </div>
+
+              {/* Button to change manual IP */}
+              <div className="text-center pt-1">
+                <button
+                  onClick={() => setShowIpConfigModal(true)}
+                  className="text-xs text-sky-300 hover:underline inline-flex items-center gap-1 font-medium cursor-pointer"
+                >
+                  ⚙️ Ubah IP Target PC Manual ({pcConfig.ip}:{pcConfig.port})
+                </button>
+              </div>
+            </div>
+
+            {/* Manual IP Configuration Modal / Drawer */}
+            {showIpConfigModal && (
+              <div className="glass-card rounded-2xl p-4 border border-sky-400/40 space-y-3 bg-slate-900/90">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    ⚙️ Pengaturan IP Jaringan PC
+                  </h4>
+                  <button
+                    onClick={() => setShowIpConfigModal(false)}
+                    className="text-xs text-slate-400 hover:text-white"
+                  >
+                    Tutup
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-300 leading-relaxed">
+                  Jika HP membuka web lewat Vercel atau domain publik, masukkan IP WiFi lokal PC Anda (contoh: <code>192.168.1.10</code>) agar file terkirim langsung ke PC tanpa lewat internet.
+                </p>
+                <form onSubmit={handleSaveCustomIp} className="space-y-2.5">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="text-[10px] text-slate-400 block mb-1">IP PC (IPv4 WiFi):</label>
+                      <input
+                        type="text"
+                        value={customIpInput}
+                        onChange={(e) => setCustomIpInput(e.target.value)}
+                        placeholder="192.168.1.10"
+                        className="w-full glass-input px-3 py-2 rounded-xl text-xs text-white font-mono outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-slate-400 block mb-1">Port:</label>
+                      <input
+                        type="number"
+                        value={customPortInput}
+                        onChange={(e) => setCustomPortInput(e.target.value)}
+                        placeholder="3000"
+                        className="w-full glass-input px-3 py-2 rounded-xl text-xs text-white font-mono outline-none"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="submit"
+                    className="w-full py-2 bg-sky-400 hover:bg-sky-300 text-slate-950 font-bold text-xs rounded-xl transition cursor-pointer"
+                  >
+                    Simpan &amp; Uji Ulang Koneksi
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {/* Troubleshooting Windows Defender Firewall */}
+            <div className="bg-slate-950/80 rounded-2xl p-4 border border-white/10 text-xs space-y-2">
+              <div className="flex items-center gap-1.5 text-amber-300 font-bold text-xs">
+                <ShieldCheck className="w-4 h-4 text-amber-400" />
+                <span>Panduan Jika Koneksi 404 / Gagal / Refused:</span>
+              </div>
+              <ul className="text-[11px] text-slate-300 space-y-1 list-disc list-inside">
+                <li>Pastikan HP dan PC terhubung ke <strong>nama WiFi yang sama</strong> (bukan cellular data).</li>
+                <li>Jika muncul <em>HTTP 404</em>, pastikan server PC menjalankan perintah <code>npm run dev</code> di port 3000.</li>
+                <li>Di PC Windows, pastikan <strong>Windows Defender Firewall</strong> mengizinkan Node.js / port 3000 pada Private Network.</li>
+              </ul>
             </div>
 
             {/* Multi-Tier Synthetic Transfer Tests */}

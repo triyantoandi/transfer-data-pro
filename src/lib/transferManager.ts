@@ -4,6 +4,7 @@ import {
   DebugLogEntry, 
   FileRecord 
 } from '../types';
+import { buildPcApiUrl } from './pcConnection';
 import { db } from './firebase';
 import { 
   collection, 
@@ -120,7 +121,9 @@ export async function sendFileViaChunkedProtocol(
   // 1. Initialize transfer session on PC server
   let initSuccess = false;
   try {
-    const initRes = await fetch('/api/transfer/init', {
+    const initUrl = buildPcApiUrl('/api/transfer/init');
+    console.log(`[PC CONNECTION]\nTarget URL: ${initUrl}\nMethod: POST`);
+    const initRes = await fetch(initUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -164,7 +167,8 @@ export async function sendFileViaChunkedProtocol(
     if (signalAbort?.aborted) {
       logger.log('CANCEL', `Transfer dihentikan pada chunk ${chunkIndex + 1}/${totalChunks}`, 'warn');
       // notify server to cleanup
-      fetch(`/api/transfer/cancel/${transferId}`, { method: 'POST' }).catch(() => {});
+      const cancelUrl = buildPcApiUrl(`/api/transfer/cancel/${transferId}`);
+      fetch(cancelUrl, { method: 'POST' }).catch(() => {});
       onProgress({ status: 'cancelled' });
       return { success: false, error: 'Dibatalkan' };
     }
@@ -184,7 +188,8 @@ export async function sendFileViaChunkedProtocol(
         formData.append('chunkIndex', chunkIndex.toString());
         formData.append('totalChunks', totalChunks.toString());
 
-        const chunkRes = await fetch('/api/transfer/chunk', {
+        const chunkUrl = buildPcApiUrl('/api/transfer/chunk');
+        const chunkRes = await fetch(chunkUrl, {
           method: 'POST',
           body: formData,
           signal: signalAbort,
@@ -229,7 +234,9 @@ export async function sendFileViaChunkedProtocol(
     speed: 'Memverifikasi keutuhan file...'
   });
 
-  const completeRes = await fetch('/api/transfer/complete', {
+  const completeUrl = buildPcApiUrl('/api/transfer/complete');
+  console.log(`[PC CONNECTION]\nTarget URL: ${completeUrl}\nMethod: POST`);
+  const completeRes = await fetch(completeUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
